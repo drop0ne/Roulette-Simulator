@@ -216,7 +216,7 @@ public:
     }
 
     // Ask the user for the betting multipliers for consecutive wins.
-    // If left empty, the bet will reset to $1 after each win (old behavior).
+    // If left empty, the bet will reset to $1 after each win.
     std::vector<double> getWinningStrategyMultipliers() const {
         std::cout << "Enter the betting multipliers for each consecutive win (e.g., \"2 2 1.5\").\n";
         std::cout << "Leave empty to reset bet to $1 after each win: ";
@@ -237,8 +237,7 @@ class CasinoTimer {
 public:
     CasinoTimer() : elapsedSeconds(0) {}
 
-    // This method simulates the delay between spins.
-    // We use a short actual sleep (100 ms) to simulate delay without waiting full real time.
+    // Simulate the delay between spins (using a short sleep).
     void addSpin() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         elapsedSeconds += averageDelay;
@@ -282,8 +281,7 @@ std::string parityToString(Parity parity) {
 int main() {
     UserInterface ui;
     double bankroll = ui.getInitialBankroll();
-    // Store the initial bankroll to later compare gains/losses.
-    double startingBankroll = bankroll;
+    double startingBankroll = bankroll; // save starting bankroll for profit calculations
     int lossThreshold = ui.getLossThreshold();
 
     // Get loss multipliers.
@@ -292,7 +290,6 @@ int main() {
 
     // Get winning multipliers (if any).
     std::vector<double> winMultipliers = ui.getWinningStrategyMultipliers();
-    // If empty, then we will revert to resetting bet to $1 after each win.
     bool useWinMultipliers = !winMultipliers.empty();
     BettingStrategy winStrategy(winMultipliers);
 
@@ -300,20 +297,24 @@ int main() {
     StatsTracker stats;
     CasinoTimer timer;
 
-    // Track the number of times the max bet is reached.
+    // Track the number of times the max bet ($200) is reached.
     int maxBetReachedCount = 0;
+
+    // For profit threshold prompting: initially, ask when winnings (profit) are at least startingBankroll.
+    double nextProfitThreshold = startingBankroll;
 
     // Betting settings.
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black.
     int consecutiveLosses = 0;
     int consecutiveWins = 0;
+    bool continuePlaying = true;
 
-    while (bankroll > 0 && !timer.isTimeUp()) {
+    while (bankroll > 0 && !timer.isTimeUp() && continuePlaying) {
         int autoSpinCount = ui.getAutoSpinCount();
 
         if (autoSpinCount > 0) {
-            // Auto-play mode: perform autoSpinCount spins automatically.
+            // Auto-play mode.
             for (int i = 0; i < autoSpinCount && bankroll > 0 && !timer.isTimeUp(); ++i) {
                 RouletteOutcome outcome = wheel.spin();
 
@@ -327,9 +328,7 @@ int main() {
                     bankroll += currentBet;
                     std::cout << "You WIN! Gained $" << currentBet << "\n";
                     stats.recordWin(currentBet);
-                    // Reset loss counter.
                     consecutiveLosses = 0;
-                    // Update win streak.
                     consecutiveWins++;
                     if (useWinMultipliers) {
                         double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
@@ -349,7 +348,6 @@ int main() {
                     std::cout << "You lose $" << currentBet << "\n";
                     stats.recordLoss(currentBet);
                     consecutiveLosses++;
-                    // Reset win streak.
                     consecutiveWins = 0;
 
                     if (consecutiveLosses >= lossThreshold) {
@@ -372,15 +370,27 @@ int main() {
                 }
 
                 stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-                timer.addSpin(); // Simulate delay for this spin
+                timer.addSpin(); // simulate spin delay
 
-                if (bankroll <= 0 || timer.isTimeUp()) {
-                    break;
+                // Check profit threshold: if profit (bankroll - startingBankroll) meets or exceeds the threshold, prompt the user.
+                if (bankroll > startingBankroll && (bankroll - startingBankroll >= nextProfitThreshold)) {
+                    std::cout << "Your winnings are $" << (bankroll - startingBankroll)
+                        << " (at least an increase of $" << nextProfitThreshold << " over your starting bankroll).\n";
+                    std::cout << "Do you want to continue playing? (y/n): ";
+                    char choice;
+                    std::cin >> choice;
+                    if (choice != 'y' && choice != 'Y') {
+                        continuePlaying = false;
+                        break;
+                    }
+                    else {
+                        nextProfitThreshold += startingBankroll;
+                    }
                 }
             }
         }
         else {
-            // Manual mode: wait for user input to spin.
+            // Manual mode.
             std::cout << "Press Enter to spin the wheel...";
             std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
             std::cin.get();
@@ -438,11 +448,20 @@ int main() {
             }
 
             stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-            timer.addSpin(); // Simulate delay for this spin
+            timer.addSpin(); // simulate delay
 
-            if (bankroll <= 0) {
-                std::cout << "Your bankroll is empty. Game over.\n";
-                break;
+            if (bankroll > startingBankroll && (bankroll - startingBankroll >= nextProfitThreshold)) {
+                std::cout << "Your winnings are $" << (bankroll - startingBankroll)
+                    << " (at least an increase of $" << nextProfitThreshold << " over your starting bankroll).\n";
+                std::cout << "Do you want to continue playing? (y/n): ";
+                char choice;
+                std::cin >> choice;
+                if (choice != 'y' && choice != 'Y') {
+                    break;
+                }
+                else {
+                    nextProfitThreshold += startingBankroll;
+                }
             }
         }
     }
