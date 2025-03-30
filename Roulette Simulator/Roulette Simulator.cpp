@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <thread>
 
 // Enums for color and parity
@@ -18,7 +19,7 @@ std::string numberToString(int num) {
     return (num == 37) ? "00" : std::to_string(num);
 }
 
-// Class that encapsulates a high-quality random number generator
+// Class that encapsulates a high-quality random number generator.
 class RandomNumberGenerator {
 public:
     RandomNumberGenerator()
@@ -35,7 +36,7 @@ private:
     std::mt19937 rng;
 };
 
-// Structure for a roulette outcome
+// Structure for a roulette outcome.
 struct RouletteOutcome {
     int number;    // 0, 1,2,...,36; 37 represents "00"
     Color color;
@@ -68,6 +69,28 @@ public:
     }
 private:
     RandomNumberGenerator rng;
+};
+
+// BettingStrategy class to encapsulate the bet multiplier for each consecutive loss.
+class BettingStrategy {
+public:
+    // The constructor accepts a vector of multipliers.
+    BettingStrategy(const std::vector<double>& multipliers) : multipliers_(multipliers) {
+        if (multipliers_.empty()) {
+            // Fallback default if empty.
+            multipliers_ = { 3.0, 3.0, 2.0 };
+        }
+    }
+
+    // Returns the multiplier for the current consecutive loss.
+    // If the loss count exceeds the number of multipliers provided, the last multiplier is used.
+    double getMultiplier(int consecutiveLosses) const {
+        if (consecutiveLosses <= static_cast<int>(multipliers_.size()))
+            return multipliers_[consecutiveLosses - 1];
+        return multipliers_.back();
+    }
+private:
+    std::vector<double> multipliers_;
 };
 
 // StatsTracker class to keep track of wins, losses, bets, and history.
@@ -179,6 +202,25 @@ public:
         std::cin >> choice;
         return (choice == 'y' || choice == 'Y');
     }
+
+    // New method: Ask the user for the betting multipliers for consecutive losses.
+    std::vector<double> getBettingStrategyMultipliers() const {
+        std::cout << "Enter the betting multipliers for each consecutive loss (e.g., \"3 3 2\" or \"4 3 3 2\").\n";
+        std::cout << "Separate values with spaces and press Enter: ";
+        std::string input;
+        std::getline(std::cin >> std::ws, input);
+        std::istringstream iss(input);
+        std::vector<double> multipliers;
+        double value;
+        while (iss >> value) {
+            multipliers.push_back(value);
+        }
+        if (multipliers.empty()) {
+            std::cout << "No valid input provided. Using default multipliers: 3 3 2.\n";
+            multipliers = { 3.0, 3.0, 2.0 };
+        }
+        return multipliers;
+    }
 };
 
 // New class to simulate the casino spin delay and track elapsed play time.
@@ -198,7 +240,7 @@ public:
         return elapsedSeconds >= maxTime;
     }
 
-    // Optionally, report elapsed time (in seconds).
+    // Report elapsed time (in seconds).
     int getElapsedSeconds() const {
         return elapsedSeconds;
     }
@@ -233,13 +275,17 @@ int main() {
     double bankroll = ui.getInitialBankroll();
     int lossThreshold = ui.getLossThreshold();
 
+    // New: Get betting strategy multipliers from the user.
+    std::vector<double> multipliers = ui.getBettingStrategyMultipliers();
+    BettingStrategy strategy(multipliers);
+
     RouletteWheel wheel;
     StatsTracker stats;
     CasinoTimer timer;
 
-    // Betting settings
+    // Betting settings.
     double currentBet = 1.0;
-    Color betColor = Color::BLACK; // start betting on black
+    Color betColor = Color::BLACK; // start betting on black.
     int consecutiveLosses = 0;
 
     while (bankroll > 0 && !timer.isTimeUp()) {
@@ -267,7 +313,7 @@ int main() {
                             break;
                         }
                     }
-                    // Reset bet after a win.
+                    // Reset bet and consecutive losses after a win.
                     currentBet = 1.0;
                     consecutiveLosses = 0;
                 }
@@ -286,13 +332,8 @@ int main() {
                         consecutiveLosses = 0;
                     }
                     else {
-                        double newBet;
-                        if (consecutiveLosses <= 3) {
-                            newBet = currentBet * 3;
-                        }
-                        else {
-                            newBet = currentBet * 2;
-                        }
+                        double multiplier = strategy.getMultiplier(consecutiveLosses);
+                        double newBet = currentBet * multiplier;
                         if (newBet > 200.0) {
                             newBet = 200.0;
                         }
@@ -301,7 +342,7 @@ int main() {
                 }
 
                 stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-                timer.addSpin(); // Simulate delay for this spin
+                timer.addSpin(); // Simulate delay for this spin.
 
                 if (bankroll <= 0 || timer.isTimeUp()) {
                     break;
@@ -349,13 +390,8 @@ int main() {
                     consecutiveLosses = 0;
                 }
                 else {
-                    double newBet;
-                    if (consecutiveLosses <= 3) {
-                        newBet = currentBet * 3;
-                    }
-                    else {
-                        newBet = currentBet * 2;
-                    }
+                    double multiplier = strategy.getMultiplier(consecutiveLosses);
+                    double newBet = currentBet * multiplier;
                     if (newBet > 200.0) {
                         newBet = 200.0;
                     }
@@ -364,7 +400,7 @@ int main() {
             }
 
             stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-            timer.addSpin(); // Simulate delay for this spin
+            timer.addSpin(); // Simulate delay for this spin.
 
             if (bankroll <= 0) {
                 std::cout << "Your bankroll is empty. Game over.\n";
