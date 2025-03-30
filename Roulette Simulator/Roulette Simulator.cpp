@@ -6,6 +6,7 @@
 #include <string>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
 
 // Enums for color and parity
 enum class Color { RED, BLACK, GREEN };
@@ -58,14 +59,12 @@ public:
         else {
             // Set red numbers (typical American roulette red numbers)
             static const std::vector<int> redNumbers = { 1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36 };
-            // Determine color:
             if (std::find(redNumbers.begin(), redNumbers.end(), outcome) != redNumbers.end()) {
                 result.color = Color::RED;
             }
             else {
                 result.color = Color::BLACK;
             }
-            // Determine parity:
             result.parity = (outcome % 2 == 0) ? Parity::EVEN : Parity::ODD;
         }
         return result;
@@ -124,7 +123,7 @@ private:
     int losses;
     int totalSpins;
     double totalMoneyBet;
-    std::deque<std::string> history; // store up to last 50 outcomes
+    std::deque<std::string> history; // store up to last 10 outcomes
 
     void addToHistory(const std::string& entry) {
         if (history.size() >= 10) {
@@ -169,6 +168,14 @@ public:
         return threshold;
     }
 
+    // Ask user how many spins to auto bet for; 0 indicates manual play.
+    int getAutoSpinCount() const {
+        int count;
+        std::cout << "Enter number of spins to auto bet (0 for manual mode): ";
+        std::cin >> count;
+        return count;
+    }
+
     bool askToContinue() const {
         char choice;
         std::cout << "You have just won after reaching the max bet. Do you want to continue playing? (y/n): ";
@@ -208,82 +215,133 @@ int main() {
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black
     int consecutiveLosses = 0;
-    bool maxBetReached = false;
 
     while (bankroll > 0) {
-        std::cout << "Press Enter to spin the wheel...";
-        std::cin.ignore(); // ignore newline
-        std::cin.get();
+        int autoSpinCount = ui.getAutoSpinCount();
 
-        // Spin the roulette wheel
-        RouletteOutcome outcome = wheel.spin();
+        if (autoSpinCount > 0) {
+            // Auto-play mode: perform autoSpinCount spins automatically.
+            for (int i = 0; i < autoSpinCount && bankroll > 0; ++i) {
+                RouletteOutcome outcome = wheel.spin();
 
-        // Print outcome details
-        std::cout << "Roulette Outcome: " << numberToString(outcome.number)
-            << " (" << colorToString(outcome.color)
-            << ", " << parityToString(outcome.parity) << ")\n";
+                std::cout << "Roulette Outcome: " << numberToString(outcome.number)
+                    << " (" << colorToString(outcome.color)
+                    << ", " << parityToString(outcome.parity) << ")\n";
 
-        // Record outcome in stats history
-        stats.addOutcomeToHistory(outcome);
+                stats.addOutcomeToHistory(outcome);
 
-        // Check win or loss: we only bet on red/black
-        if (outcome.color == betColor) {
-            // Win: even money payout.
-            bankroll += currentBet;
-            std::cout << "You WIN! Gained $" << currentBet << "\n";
-            stats.recordWin(currentBet);
-            // Reset bet and loss counter after a win.
-            currentBet = 1.0;
-            consecutiveLosses = 0;
-            maxBetReached = false;
+                if (outcome.color == betColor) {
+                    bankroll += currentBet;
+                    std::cout << "You WIN! Gained $" << currentBet << "\n";
+                    stats.recordWin(currentBet);
+                    if (currentBet == 200.0) {
+                        if (!ui.askToContinue()) {
+                            bankroll = 0; // exit outer loop
+                            break;
+                        }
+                    }
+                    // Reset bet to $1 after a win.
+                    currentBet = 1.0;
+                    consecutiveLosses = 0;
+                }
+                else {
+                    bankroll -= currentBet;
+                    std::cout << "You lose $" << currentBet << "\n";
+                    stats.recordLoss(currentBet);
+                    ++consecutiveLosses;
 
-            // If the previous bet had been capped at $200, ask to continue.
-            if (maxBetReached) {
-                if (!ui.askToContinue()) {
+                    if (consecutiveLosses >= lossThreshold) {
+                        betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
+                        std::cout << "Consecutive losses reached " << lossThreshold
+                            << ". Switching bet color to " << colorToString(betColor)
+                            << " and resetting bet to $1.\n";
+                        currentBet = 1.0;
+                        consecutiveLosses = 0;
+                    }
+                    else {
+                        double newBet;
+                        if (consecutiveLosses <= 3) {
+                            newBet = currentBet * 3;
+                        }
+                        else {
+                            newBet = currentBet * 2;
+                        }
+                        if (newBet > 200.0) {
+                            newBet = 200.0;
+                        }
+                        currentBet = newBet;
+                    }
+                }
+
+                stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+
+                if (bankroll <= 0) {
+                    std::cout << "Your bankroll is empty. Game over.\n";
                     break;
                 }
             }
         }
         else {
-            // Loss
-            bankroll -= currentBet;
-            std::cout << "You lose $" << currentBet << "\n";
-            stats.recordLoss(currentBet);
-            ++consecutiveLosses;
+            // Manual mode: wait for user input to spin.
+            std::cout << "Press Enter to spin the wheel...";
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cin.get();
 
-            // Check if loss threshold is reached; if so, switch bet color and reset bet.
-            if (consecutiveLosses >= lossThreshold) {
-                betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
-                std::cout << "Consecutive losses reached " << lossThreshold
-                    << ". Switching bet color to " << colorToString(betColor) << " and resetting bet to $1.\n";
+            RouletteOutcome outcome = wheel.spin();
+
+            std::cout << "Roulette Outcome: " << numberToString(outcome.number)
+                << " (" << colorToString(outcome.color)
+                << ", " << parityToString(outcome.parity) << ")\n";
+
+            stats.addOutcomeToHistory(outcome);
+
+            if (outcome.color == betColor) {
+                bankroll += currentBet;
+                std::cout << "You WIN! Gained $" << currentBet << "\n";
+                stats.recordWin(currentBet);
+                if (currentBet == 200.0) {
+                    if (!ui.askToContinue()) {
+                        break;
+                    }
+                }
                 currentBet = 1.0;
                 consecutiveLosses = 0;
-                maxBetReached = false;
             }
             else {
-                // Adjust bet: first 3 losses multiply by 3, subsequent losses multiply by 2.
-                double newBet;
-                if (consecutiveLosses <= 3) {
-                    newBet = currentBet * 3;
+                bankroll -= currentBet;
+                std::cout << "You lose $" << currentBet << "\n";
+                stats.recordLoss(currentBet);
+                ++consecutiveLosses;
+
+                if (consecutiveLosses >= lossThreshold) {
+                    betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
+                    std::cout << "Consecutive losses reached " << lossThreshold
+                        << ". Switching bet color to " << colorToString(betColor)
+                        << " and resetting bet to $1.\n";
+                    currentBet = 1.0;
+                    consecutiveLosses = 0;
                 }
                 else {
-                    newBet = currentBet * 2;
+                    double newBet;
+                    if (consecutiveLosses <= 3) {
+                        newBet = currentBet * 3;
+                    }
+                    else {
+                        newBet = currentBet * 2;
+                    }
+                    if (newBet > 200.0) {
+                        newBet = 200.0;
+                    }
+                    currentBet = newBet;
                 }
-                if (newBet > 200.0) {
-                    newBet = 200.0;
-                    maxBetReached = true;
-                }
-                currentBet = newBet;
             }
-        }
 
-        // Print detailed stats after each spin.
-        stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+            stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
 
-        // Check if bankroll is depleted.
-        if (bankroll <= 0) {
-            std::cout << "Your bankroll is empty. Game over.\n";
-            break;
+            if (bankroll <= 0) {
+                std::cout << "Your bankroll is empty. Game over.\n";
+                break;
+            }
         }
     }
 
