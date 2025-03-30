@@ -121,11 +121,11 @@ private:
     std::vector<double> multipliers_;
 };
 
-// StatsTracker class to keep track of wins, losses, bets, and history.
+// StatsTracker class to keep track of wins, losses, bets, history, and new green/zero stats.
 class StatsTracker {
 public:
     StatsTracker()
-        : wins(0), losses(0), totalSpins(0), totalMoneyBet(0.0)
+        : wins(0), losses(0), totalSpins(0), totalMoneyBet(0.0), count0(0), count00(0)
     {
     }
 
@@ -143,7 +143,14 @@ public:
         addToHistory("Loss: Bet $" + std::to_string(betAmount));
     }
 
+    // Updated to record extra stats for outcomes.
     void addOutcomeToHistory(const RouletteOutcome& outcome) {
+        if (outcome.number == 0) {
+            count0++;
+        }
+        else if (outcome.number == 37) {
+            count00++;
+        }
         std::string outcomeStr = "Spin: " + numberToString(outcome.number) +
             " (" + colorToString(outcome.color) + ", " + parityToString(outcome.parity) + ")";
         addToHistory(outcomeStr);
@@ -163,6 +170,10 @@ public:
         for (const auto& h : history) {
             std::cout << "  " << h << "\n";
         }
+        // Print new stats.
+        std::cout << "Total Green Outcomes (0 or 00): " << (count0 + count00) << "\n";
+        std::cout << "   - 0 appeared: " << count0 << " times\n";
+        std::cout << "   - 00 appeared: " << count00 << " times\n";
         std::cout << "=========================\n\n";
     }
 
@@ -172,6 +183,10 @@ private:
     int totalSpins;
     double totalMoneyBet;
     std::deque<std::string> history; // store up to last 10 outcomes
+
+    // New counters for green outcomes.
+    int count0;
+    int count00;
 
     void addToHistory(const std::string& entry) {
         if (history.size() >= 10) {
@@ -216,7 +231,7 @@ public:
         return threshold;
     }
 
-    // Updated prompt: 
+    // Updated prompt:
     // Enter a positive number for auto-play count,
     // 0 for manual mode,
     // or -1 for continuous mode (play without interruption until game ends).
@@ -360,7 +375,7 @@ int main() {
     // Main game loop.
     while (bankroll > 0 && !timer.isTimeUp() && continuePlaying) {
         if (continuousMode) {
-            // In continuous mode, run one spin per iteration without prompting.
+            // Continuous mode: run one spin per iteration without prompting.
             RouletteOutcome outcome = wheel.spin();
             std::cout << "Roulette Outcome: " << numberToString(outcome.number)
                 << " (" << colorToString(outcome.color)
@@ -433,7 +448,7 @@ int main() {
             // In continuous mode, skip profit threshold prompt.
         }
         else {
-            // Non-continuous mode: prompt user for a batch.
+            // Non-continuous modes: prompt for auto-play count or manual spins.
             int autoSpinCount = ui.getAutoSpinCount();
             if (autoSpinCount > 0) {
                 for (int i = 0; i < autoSpinCount && bankroll > 0 && !timer.isTimeUp(); ++i) {
@@ -523,7 +538,7 @@ int main() {
                     }
                 }
             }
-            else { // manual mode (autoSpinCount == 0)
+            else { // Manual mode (autoSpinCount == 0)
                 std::cout << "Press Enter to spin the wheel...";
                 std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
                 std::cin.get();
