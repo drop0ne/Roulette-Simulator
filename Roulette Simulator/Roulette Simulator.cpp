@@ -14,9 +14,31 @@
 enum class Color { RED, BLACK, GREEN };
 enum class Parity { ODD, EVEN, NONE };
 
+// New enum for play mode.
+enum class PlayMode { MANUAL, AUTOPLAY, CONTINUOUS };
+
 // Helper to convert number to string (handles "00").
 std::string numberToString(int num) {
     return (num == 37) ? "00" : std::to_string(num);
+}
+
+// Helper functions to convert enums to strings.
+std::string colorToString(Color color) {
+    switch (color) {
+    case Color::RED: return "Red";
+    case Color::BLACK: return "Black";
+    case Color::GREEN: return "Green";
+    default: return "Unknown";
+    }
+}
+
+std::string parityToString(Parity parity) {
+    switch (parity) {
+    case Parity::ODD: return "Odd";
+    case Parity::EVEN: return "Even";
+    case Parity::NONE: return "None";
+    default: return "Unknown";
+    }
 }
 
 // Class that encapsulates a high-quality random number generator.
@@ -194,52 +216,49 @@ private:
         }
         history.push_back(entry);
     }
-
-    std::string colorToString(Color color) const {
-        switch (color) {
-        case Color::RED: return "Red";
-        case Color::BLACK: return "Black";
-        case Color::GREEN: return "Green";
-        default: return "Unknown";
-        }
-    }
-
-    std::string parityToString(Parity parity) const {
-        switch (parity) {
-        case Parity::ODD: return "Odd";
-        case Parity::EVEN: return "Even";
-        case Parity::NONE: return "None";
-        default: return "Unknown";
-        }
-    }
 };
 
-// UserInterface class to manage I/O interactions.
+// UserInterface class to manage I/O interactions with input validation.
 class UserInterface {
 public:
+    // Templated function for validated numeric input.
+    template<typename T>
+    T getValidatedInput(const std::string& prompt) const {
+        T value;
+        while (true) {
+            std::cout << prompt;
+            if (std::cin >> value) {
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                break;
+            }
+            else {
+                std::cout << "Invalid input. Please try again.\n";
+                std::cin.clear();
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            }
+        }
+        return value;
+    }
+
     double getInitialBankroll() const {
-        double bankroll;
-        std::cout << "Enter your initial bankroll: $";
-        std::cin >> bankroll;
-        return bankroll;
+        return getValidatedInput<double>("Enter your initial bankroll: $");
     }
 
     int getLossThreshold() const {
-        int threshold;
-        std::cout << "Enter the maximum consecutive losses allowed before switching bet color: ";
-        std::cin >> threshold;
-        return threshold;
+        return getValidatedInput<int>("Enter the maximum consecutive losses allowed before switching bet color: ");
     }
 
-    // Updated prompt:
-    // Enter a positive number for auto-play count,
-    // 0 for manual mode,
-    // or -1 for continuous mode (play without interruption until game ends).
-    int getAutoSpinCount() const {
-        int count;
-        std::cout << "Enter number of spins to auto bet (0 for manual mode, -1 for continuous mode, positive number for auto-play count): ";
-        std::cin >> count;
-        return count;
+    // New function to get play mode.
+    // Input: 0 for manual, -1 for continuous, positive number for auto-play count.
+    std::pair<PlayMode, int> getPlayMode() const {
+        int modeInput = getValidatedInput<int>(
+            "Enter play mode (0 for manual, -1 for continuous, positive number for auto-play count): ");
+        if (modeInput == 0)
+            return { PlayMode::MANUAL, 0 };
+        else if (modeInput == -1)
+            return { PlayMode::CONTINUOUS, 0 };
+        else
+            return { PlayMode::AUTOPLAY, modeInput };
     }
 
     // Ask the user for the betting multipliers for consecutive losses.
@@ -247,7 +266,7 @@ public:
         std::cout << "Enter the betting multipliers for each consecutive loss (e.g., \"3 3 2\" or \"4 3 3 2\").\n";
         std::cout << "Separate values with spaces and press Enter: ";
         std::string input;
-        std::getline(std::cin >> std::ws, input);
+        std::getline(std::cin, input);
         std::istringstream iss(input);
         std::vector<double> multipliers;
         double value;
@@ -267,7 +286,7 @@ public:
         std::cout << "Enter the betting multipliers for each consecutive win (e.g., \"2 2 1.5\").\n";
         std::cout << "Leave empty to reset bet to $1 after each win: ";
         std::string input;
-        std::getline(std::cin >> std::ws, input);
+        std::getline(std::cin, input);
         std::istringstream iss(input);
         std::vector<double> multipliers;
         double value;
@@ -282,6 +301,7 @@ public:
         char choice;
         std::cout << "Do you want to enable Extra Bet mode (place $1 bet on both 0 and 00 every spin)? (y/n): ";
         std::cin >> choice;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         return (choice == 'y' || choice == 'Y');
     }
 };
@@ -313,25 +333,6 @@ private:
     int elapsedSeconds;
 };
 
-// Helper functions to convert enums to strings for printing.
-std::string colorToString(Color color) {
-    switch (color) {
-    case Color::RED: return "Red";
-    case Color::BLACK: return "Black";
-    case Color::GREEN: return "Green";
-    default: return "Unknown";
-    }
-}
-
-std::string parityToString(Parity parity) {
-    switch (parity) {
-    case Parity::ODD: return "Odd";
-    case Parity::EVEN: return "Even";
-    case Parity::NONE: return "None";
-    default: return "Unknown";
-    }
-}
-
 int main() {
     UserInterface ui;
     double bankroll = ui.getInitialBankroll();
@@ -351,6 +352,9 @@ int main() {
     bool extraModeEnabled = ui.askExtraBetMode();
     ExtraBetMode extraBetMode(extraModeEnabled);
 
+    // Get play mode (manual, auto-play, or continuous).
+    auto [playMode, autoSpinCount] = ui.getPlayMode();
+
     RouletteWheel wheel;
     StatsTracker stats;
     CasinoTimer timer;
@@ -361,10 +365,6 @@ int main() {
     // For profit threshold prompting.
     double nextProfitThreshold = startingBankroll;
 
-    // Determine play mode.
-    int autoSpinChoice = ui.getAutoSpinCount();
-    bool continuousMode = (autoSpinChoice == -1);
-
     // Betting settings.
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black.
@@ -372,260 +372,130 @@ int main() {
     int consecutiveWins = 0;
     bool continuePlaying = true;
 
+    // Lambda to process one spin.
+    auto processSpin = [&]() -> bool {
+        // For manual mode, prompt the user to press Enter.
+        if (playMode == PlayMode::MANUAL) {
+            std::cout << "Press Enter to spin the wheel...";
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        }
+        RouletteOutcome outcome = wheel.spin();
+        std::cout << "\nRoulette Outcome: " << numberToString(outcome.number)
+            << " (" << colorToString(outcome.color)
+            << ", " << parityToString(outcome.parity) << ")\n";
+        stats.addOutcomeToHistory(outcome);
+
+        double extraResult = extraBetMode.isEnabled() ? extraBetMode.processOutcome(outcome.number) : 0.0;
+        double totalWager = currentBet + (extraBetMode.isEnabled() ? extraBetMode.extraBetAmount() : 0.0);
+
+        if (outcome.color == betColor) { // Main bet wins.
+            // Even money win.
+            double netChange = currentBet + extraResult;
+            bankroll += netChange;
+            std::cout << "You WIN on your main bet! Gained $" << currentBet;
+            if (extraBetMode.isEnabled())
+                std::cout << " (extra bets result in " << extraResult << ")";
+            std::cout << ".\n";
+            stats.recordWin(currentBet);
+            consecutiveLosses = 0;
+            consecutiveWins++;
+            if (useWinMultipliers) {
+                double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
+                if (newBet >= 200.0) {
+                    newBet = 200.0;
+                    maxBetReachedCount++;
+                }
+                currentBet = newBet;
+            }
+            else {
+                currentBet = 1.0;
+                consecutiveWins = 0;
+            }
+        }
+        else { // Main bet loses.
+            if (outcome.number == 0 || outcome.number == 37) { // Outcome is green.
+                double netChange = -currentBet + extraResult;
+                bankroll += netChange;
+                std::cout << "Outcome is green (" << numberToString(outcome.number)
+                    << "). Main bet lost $" << currentBet
+                    << ", extra bets result in " << extraResult << ".\n";
+                stats.recordLoss(currentBet);
+            }
+            else { // Opposite color.
+                bankroll -= totalWager;
+                std::cout << "You lose. Lost $" << totalWager << " (main bet plus extra bets).\n";
+                stats.recordLoss(currentBet);
+            }
+            consecutiveLosses++;
+            consecutiveWins = 0;
+            double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
+            double newBet = totalWager * multiplier;
+            if (newBet >= 200.0) {
+                newBet = 200.0;
+                maxBetReachedCount++;
+            }
+            currentBet = newBet;
+        }
+
+        // Check if consecutive losses have reached the threshold. If so, switch bet color.
+        if (consecutiveLosses >= lossThreshold) {
+            betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
+            std::cout << "Reached " << lossThreshold
+                << " consecutive losses. Switching bet color to "
+                << colorToString(betColor) << ".\n";
+            consecutiveLosses = 0;
+        }
+
+        stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+        timer.addSpin();
+
+        // In manual and auto-play modes, prompt for profit threshold check.
+        if (playMode != PlayMode::CONTINUOUS && bankroll > startingBankroll &&
+            (bankroll - startingBankroll >= nextProfitThreshold))
+        {
+            std::cout << "Your winnings are $" << (bankroll - startingBankroll)
+                << " (an increase of at least $" << nextProfitThreshold
+                << " over your starting bankroll).\n";
+            char choice;
+            std::cout << "Do you want to continue playing? (y/n): ";
+            std::cin >> choice;
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            if (choice != 'y' && choice != 'Y') {
+                return false;
+            }
+            else {
+                nextProfitThreshold += startingBankroll;
+            }
+        }
+        return true;
+        };
+
     // Main game loop.
     while (bankroll > 0 && !timer.isTimeUp() && continuePlaying) {
-        if (continuousMode) {
-            // Continuous mode: run one spin per iteration without prompting.
-            RouletteOutcome outcome = wheel.spin();
-            std::cout << "Roulette Outcome: " << numberToString(outcome.number)
-                << " (" << colorToString(outcome.color)
-                << ", " << parityToString(outcome.parity) << ")\n";
-            stats.addOutcomeToHistory(outcome);
-
-            double extraResult = extraBetMode.isEnabled() ? extraBetMode.processOutcome(outcome.number) : 0.0;
-            double totalWager = currentBet + (extraBetMode.isEnabled() ? extraBetMode.extraBetAmount() : 0.0);
-
-            if (outcome.color == betColor) { // main bet wins (red/black win)
-                double netChange = currentBet + extraResult;
-                bankroll += netChange;
-                std::cout << "You WIN on your main bet! Gained $" << currentBet;
-                if (extraBetMode.isEnabled())
-                    std::cout << " but extra bets lose $2";
-                std::cout << ".\n";
-                stats.recordWin(currentBet);
-                consecutiveLosses = 0;
-                consecutiveWins++;
-                if (useWinMultipliers) {
-                    double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
-                    if (newBet >= 200.0) {
-                        newBet = 200.0;
-                        maxBetReachedCount++;
-                    }
-                    currentBet = newBet;
-                }
-                else {
-                    currentBet = 1.0;
-                    consecutiveWins = 0;
-                }
-            }
-            else { // main bet loses
-                if (outcome.number == 0 || outcome.number == 37) { // outcome is green
-                    double netChange = -currentBet + extraResult;
-                    bankroll += netChange;
-                    std::cout << "Outcome is green (" << numberToString(outcome.number)
-                        << "). Main bet lost $" << currentBet << ", extra bets net $" << netChange << ".\n";
-                    stats.recordLoss(currentBet);
-                    consecutiveLosses++;
-                    consecutiveWins = 0;
-                    double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                    double newBet = totalWager * multiplier;
-                    if (newBet >= 200.0) {
-                        newBet = 200.0;
-                        maxBetReachedCount++;
-                    }
-                    currentBet = newBet;
-                }
-                else { // opposite color: full loss.
-                    double netLoss = totalWager;
-                    bankroll -= netLoss;
-                    std::cout << "You lose. Lost $" << netLoss << " (main bet plus extra bets).\n";
-                    stats.recordLoss(currentBet);
-                    consecutiveLosses++;
-                    consecutiveWins = 0;
-                    double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                    double newBet = totalWager * multiplier;
-                    if (newBet >= 200.0) {
-                        newBet = 200.0;
-                        maxBetReachedCount++;
-                    }
-                    currentBet = newBet;
-                }
-            }
-
-            stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-            timer.addSpin(); // simulate delay
-
-            // In continuous mode, skip profit threshold prompt.
+        if (playMode == PlayMode::CONTINUOUS) {
+            // In continuous mode, process one spin per iteration.
+            if (!processSpin()) break;
         }
-        else {
-            // Non-continuous modes: prompt for auto-play count or manual spins.
-            int autoSpinCount = ui.getAutoSpinCount();
-            if (autoSpinCount > 0) {
-                for (int i = 0; i < autoSpinCount && bankroll > 0 && !timer.isTimeUp(); ++i) {
-                    RouletteOutcome outcome = wheel.spin();
-                    std::cout << "Roulette Outcome: " << numberToString(outcome.number)
-                        << " (" << colorToString(outcome.color)
-                        << ", " << parityToString(outcome.parity) << ")\n";
-                    stats.addOutcomeToHistory(outcome);
-
-                    double extraResult = extraBetMode.isEnabled() ? extraBetMode.processOutcome(outcome.number) : 0.0;
-                    double totalWager = currentBet + (extraBetMode.isEnabled() ? extraBetMode.extraBetAmount() : 0.0);
-
-                    if (outcome.color == betColor) {
-                        double netChange = currentBet + extraResult;
-                        bankroll += netChange;
-                        std::cout << "You WIN on your main bet! Gained $" << currentBet;
-                        if (extraBetMode.isEnabled())
-                            std::cout << " but extra bets lose $2";
-                        std::cout << ".\n";
-                        stats.recordWin(currentBet);
-                        consecutiveLosses = 0;
-                        consecutiveWins++;
-                        if (useWinMultipliers) {
-                            double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
-                            if (newBet >= 200.0) {
-                                newBet = 200.0;
-                                maxBetReachedCount++;
-                            }
-                            currentBet = newBet;
-                        }
-                        else {
-                            currentBet = 1.0;
-                            consecutiveWins = 0;
-                        }
-                    }
-                    else {
-                        if (outcome.number == 0 || outcome.number == 37) {
-                            double netChange = -currentBet + extraResult;
-                            bankroll += netChange;
-                            std::cout << "Outcome is green (" << numberToString(outcome.number)
-                                << "). Main bet lost $" << currentBet << ", extra bets net $" << netChange << ".\n";
-                            stats.recordLoss(currentBet);
-                            consecutiveLosses++;
-                            consecutiveWins = 0;
-                            double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                            double newBet = totalWager * multiplier;
-                            if (newBet >= 200.0) {
-                                newBet = 200.0;
-                                maxBetReachedCount++;
-                            }
-                            currentBet = newBet;
-                        }
-                        else {
-                            double netLoss = totalWager;
-                            bankroll -= netLoss;
-                            std::cout << "You lose. Lost $" << netLoss << " (main bet plus extra bets).\n";
-                            stats.recordLoss(currentBet);
-                            consecutiveLosses++;
-                            consecutiveWins = 0;
-                            double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                            double newBet = totalWager * multiplier;
-                            if (newBet >= 200.0) {
-                                newBet = 200.0;
-                                maxBetReachedCount++;
-                            }
-                            currentBet = newBet;
-                        }
-                    }
-
-                    stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-                    timer.addSpin(); // simulate delay
-
-                    // Check profit threshold prompt.
-                    if (bankroll > startingBankroll && (bankroll - startingBankroll >= nextProfitThreshold)) {
-                        std::cout << "Your winnings are $" << (bankroll - startingBankroll)
-                            << " (at least an increase of $" << nextProfitThreshold << " over your starting bankroll).\n";
-                        std::cout << "Do you want to continue playing? (y/n): ";
-                        char choice;
-                        std::cin >> choice;
-                        if (choice != 'y' && choice != 'Y') {
-                            continuePlaying = false;
-                            break;
-                        }
-                        else {
-                            nextProfitThreshold += startingBankroll;
-                        }
-                    }
+        else if (playMode == PlayMode::AUTOPLAY) {
+            // Auto-play: process a fixed number of spins.
+            for (int i = 0; i < autoSpinCount && bankroll > 0 && !timer.isTimeUp(); ++i) {
+                if (!processSpin()) {
+                    continuePlaying = false;
+                    break;
                 }
             }
-            else { // Manual mode (autoSpinCount == 0)
-                std::cout << "Press Enter to spin the wheel...";
+            // After a block of auto-play spins, prompt the user whether to continue.
+            if (continuePlaying) {
+                char choice;
+                std::cout << "Auto-play block complete. Continue playing? (y/n): ";
+                std::cin >> choice;
                 std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                std::cin.get();
-
-                RouletteOutcome outcome = wheel.spin();
-                std::cout << "Roulette Outcome: " << numberToString(outcome.number)
-                    << " (" << colorToString(outcome.color)
-                    << ", " << parityToString(outcome.parity) << ")\n";
-                stats.addOutcomeToHistory(outcome);
-
-                double extraResult = extraBetMode.isEnabled() ? extraBetMode.processOutcome(outcome.number) : 0.0;
-                double totalWager = currentBet + (extraBetMode.isEnabled() ? extraBetMode.extraBetAmount() : 0.0);
-
-                if (outcome.color == betColor) {
-                    double netChange = currentBet + extraResult;
-                    bankroll += netChange;
-                    std::cout << "You WIN on your main bet! Gained $" << currentBet;
-                    if (extraBetMode.isEnabled())
-                        std::cout << " but extra bets lose $2";
-                    std::cout << ".\n";
-                    stats.recordWin(currentBet);
-                    consecutiveLosses = 0;
-                    consecutiveWins++;
-                    if (useWinMultipliers) {
-                        double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
-                        if (newBet >= 200.0) {
-                            newBet = 200.0;
-                            maxBetReachedCount++;
-                        }
-                        currentBet = newBet;
-                    }
-                    else {
-                        currentBet = 1.0;
-                        consecutiveWins = 0;
-                    }
-                }
-                else {
-                    if (outcome.number == 0 || outcome.number == 37) {
-                        double netChange = -currentBet + extraResult;
-                        bankroll += netChange;
-                        std::cout << "Outcome is green (" << numberToString(outcome.number)
-                            << "). Main bet lost $" << currentBet << ", extra bets net $" << netChange << ".\n";
-                        stats.recordLoss(currentBet);
-                        consecutiveLosses++;
-                        consecutiveWins = 0;
-                        double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                        double newBet = totalWager * multiplier;
-                        if (newBet >= 200.0) {
-                            newBet = 200.0;
-                            maxBetReachedCount++;
-                        }
-                        currentBet = newBet;
-                    }
-                    else {
-                        double netLoss = totalWager;
-                        bankroll -= netLoss;
-                        std::cout << "You lose. Lost $" << netLoss << " (main bet plus extra bets).\n";
-                        stats.recordLoss(currentBet);
-                        consecutiveLosses++;
-                        consecutiveWins = 0;
-                        double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
-                        double newBet = totalWager * multiplier;
-                        if (newBet >= 200.0) {
-                            newBet = 200.0;
-                            maxBetReachedCount++;
-                        }
-                        currentBet = newBet;
-                    }
-                }
-
-                stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-                timer.addSpin(); // simulate delay
-
-                if (bankroll > startingBankroll && (bankroll - startingBankroll >= nextProfitThreshold)) {
-                    std::cout << "Your winnings are $" << (bankroll - startingBankroll)
-                        << " (at least an increase of $" << nextProfitThreshold << " over your starting bankroll).\n";
-                    std::cout << "Do you want to continue playing? (y/n): ";
-                    char choice;
-                    std::cin >> choice;
-                    if (choice != 'y' && choice != 'Y') {
-                        break;
-                    }
-                    else {
-                        nextProfitThreshold += startingBankroll;
-                    }
-                }
+                if (choice != 'y' && choice != 'Y')
+                    break;
             }
+        }
+        else { // Manual mode.
+            if (!processSpin()) break;
         }
     }
 
