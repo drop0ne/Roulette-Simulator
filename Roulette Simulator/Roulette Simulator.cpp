@@ -10,11 +10,11 @@
 #include <sstream>
 #include <thread>
 
-// Enums for color and parity
+// Enums for color and parity.
 enum class Color { RED, BLACK, GREEN };
 enum class Parity { ODD, EVEN, NONE };
 
-// Helper to convert number to string (handles "00")
+// Helper to convert number to string (handles "00").
 std::string numberToString(int num) {
     return (num == 37) ? "00" : std::to_string(num);
 }
@@ -71,7 +71,7 @@ private:
     RandomNumberGenerator rng;
 };
 
-// BettingStrategy class to encapsulate the bet multiplier for each consecutive loss.
+// BettingStrategy class to encapsulate a multiplier strategy (for losses or wins).
 class BettingStrategy {
 public:
     // The constructor accepts a vector of multipliers.
@@ -82,11 +82,11 @@ public:
         }
     }
 
-    // Returns the multiplier for the current consecutive loss.
-    // If the loss count exceeds the number of multipliers provided, the last multiplier is used.
-    double getMultiplier(int consecutiveLosses) const {
-        if (consecutiveLosses <= static_cast<int>(multipliers_.size()))
-            return multipliers_[consecutiveLosses - 1];
+    // Returns the multiplier for the current consecutive event.
+    // If the count exceeds the number of multipliers provided, the last multiplier is used.
+    double getMultiplier(int consecutiveCount) const {
+        if (consecutiveCount <= static_cast<int>(multipliers_.size()))
+            return multipliers_[consecutiveCount - 1];
         return multipliers_.back();
     }
 private:
@@ -203,7 +203,7 @@ public:
         return (choice == 'y' || choice == 'Y');
     }
 
-    // New method: Ask the user for the betting multipliers for consecutive losses.
+    // Ask the user for the betting multipliers for consecutive losses.
     std::vector<double> getBettingStrategyMultipliers() const {
         std::cout << "Enter the betting multipliers for each consecutive loss (e.g., \"3 3 2\" or \"4 3 3 2\").\n";
         std::cout << "Separate values with spaces and press Enter: ";
@@ -216,10 +216,26 @@ public:
             multipliers.push_back(value);
         }
         if (multipliers.empty()) {
-            std::cout << "No valid input provided. Using default multipliers: 3 3 2.\n";
+            std::cout << "No valid input provided. Using default loss multipliers: 3 3 2.\n";
             multipliers = { 3.0, 3.0, 2.0 };
         }
         return multipliers;
+    }
+
+    // Ask the user for the betting multipliers for consecutive wins.
+    // If left empty, the bet will reset to $1 after each win (old behavior).
+    std::vector<double> getWinningStrategyMultipliers() const {
+        std::cout << "Enter the betting multipliers for each consecutive win (e.g., \"2 2 1.5\").\n";
+        std::cout << "Leave empty to reset bet to $1 after each win: ";
+        std::string input;
+        std::getline(std::cin >> std::ws, input);
+        std::istringstream iss(input);
+        std::vector<double> multipliers;
+        double value;
+        while (iss >> value) {
+            multipliers.push_back(value);
+        }
+        return multipliers; // may be empty
     }
 };
 
@@ -277,9 +293,15 @@ int main() {
     double startingBankroll = bankroll;
     int lossThreshold = ui.getLossThreshold();
 
-    // New: Get betting strategy multipliers from the user.
-    std::vector<double> multipliers = ui.getBettingStrategyMultipliers();
-    BettingStrategy strategy(multipliers);
+    // Get loss multipliers.
+    std::vector<double> lossMultipliers = ui.getBettingStrategyMultipliers();
+    BettingStrategy lossStrategy(lossMultipliers);
+
+    // Get winning multipliers (if any).
+    std::vector<double> winMultipliers = ui.getWinningStrategyMultipliers();
+    // If empty, then we will revert to resetting bet to $1 after each win.
+    bool useWinMultipliers = !winMultipliers.empty();
+    BettingStrategy winStrategy(winMultipliers);
 
     RouletteWheel wheel;
     StatsTracker stats;
@@ -289,6 +311,7 @@ int main() {
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black.
     int consecutiveLosses = 0;
+    int consecutiveWins = 0;
 
     while (bankroll > 0 && !timer.isTimeUp()) {
         int autoSpinCount = ui.getAutoSpinCount();
@@ -304,24 +327,37 @@ int main() {
 
                 stats.addOutcomeToHistory(outcome);
 
-                if (outcome.color == betColor) {
+                if (outcome.color == betColor) { // WIN
                     bankroll += currentBet;
                     std::cout << "You WIN! Gained $" << currentBet << "\n";
                     stats.recordWin(currentBet);
+                    // Reset loss counter.
+                    consecutiveLosses = 0;
+                    // Update win streak.
+                    consecutiveWins++;
                     if (currentBet == 200.0) {
                         if (!ui.askToContinue()) {
                             bankroll = 0;
                             break;
                         }
                     }
-                    currentBet = 1.0;
-                    consecutiveLosses = 0;
+                    if (useWinMultipliers) {
+                        double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
+                        if (newBet > 200.0) newBet = 200.0;
+                        currentBet = newBet;
+                    }
+                    else {
+                        currentBet = 1.0;
+                        consecutiveWins = 0;
+                    }
                 }
-                else {
+                else { // LOSS
                     bankroll -= currentBet;
                     std::cout << "You lose $" << currentBet << "\n";
                     stats.recordLoss(currentBet);
-                    ++consecutiveLosses;
+                    consecutiveLosses++;
+                    // Reset win streak.
+                    consecutiveWins = 0;
 
                     if (consecutiveLosses >= lossThreshold) {
                         betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
@@ -332,7 +368,7 @@ int main() {
                         consecutiveLosses = 0;
                     }
                     else {
-                        double multiplier = strategy.getMultiplier(consecutiveLosses);
+                        double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
                         double newBet = currentBet * multiplier;
                         if (newBet > 200.0) {
                             newBet = 200.0;
@@ -363,24 +399,33 @@ int main() {
 
             stats.addOutcomeToHistory(outcome);
 
-            if (outcome.color == betColor) {
+            if (outcome.color == betColor) { // WIN
                 bankroll += currentBet;
                 std::cout << "You WIN! Gained $" << currentBet << "\n";
                 stats.recordWin(currentBet);
+                consecutiveLosses = 0;
+                consecutiveWins++;
                 if (currentBet == 200.0) {
                     if (!ui.askToContinue()) {
                         break;
                     }
                 }
-                currentBet = 1.0;
-                consecutiveLosses = 0;
+                if (useWinMultipliers) {
+                    double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
+                    if (newBet > 200.0) newBet = 200.0;
+                    currentBet = newBet;
+                }
+                else {
+                    currentBet = 1.0;
+                    consecutiveWins = 0;
+                }
             }
-            else {
+            else { // LOSS
                 bankroll -= currentBet;
                 std::cout << "You lose $" << currentBet << "\n";
                 stats.recordLoss(currentBet);
-                ++consecutiveLosses;
-
+                consecutiveLosses++;
+                consecutiveWins = 0;
                 if (consecutiveLosses >= lossThreshold) {
                     betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
                     std::cout << "Consecutive losses reached " << lossThreshold
@@ -390,7 +435,7 @@ int main() {
                     consecutiveLosses = 0;
                 }
                 else {
-                    double multiplier = strategy.getMultiplier(consecutiveLosses);
+                    double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
                     double newBet = currentBet * multiplier;
                     if (newBet > 200.0) {
                         newBet = 200.0;
