@@ -196,13 +196,6 @@ public:
         return count;
     }
 
-    bool askToContinue() const {
-        char choice;
-        std::cout << "You have just won after reaching the max bet. Do you want to continue playing? (y/n): ";
-        std::cin >> choice;
-        return (choice == 'y' || choice == 'Y');
-    }
-
     // Ask the user for the betting multipliers for consecutive losses.
     std::vector<double> getBettingStrategyMultipliers() const {
         std::cout << "Enter the betting multipliers for each consecutive loss (e.g., \"3 3 2\" or \"4 3 3 2\").\n";
@@ -307,6 +300,9 @@ int main() {
     StatsTracker stats;
     CasinoTimer timer;
 
+    // Track the number of times the max bet is reached.
+    int maxBetReachedCount = 0;
+
     // Betting settings.
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black.
@@ -335,15 +331,12 @@ int main() {
                     consecutiveLosses = 0;
                     // Update win streak.
                     consecutiveWins++;
-                    if (currentBet == 200.0) {
-                        if (!ui.askToContinue()) {
-                            bankroll = 0;
-                            break;
-                        }
-                    }
                     if (useWinMultipliers) {
                         double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
-                        if (newBet > 200.0) newBet = 200.0;
+                        if (newBet >= 200.0) {
+                            newBet = 200.0;
+                            maxBetReachedCount++;
+                        }
                         currentBet = newBet;
                     }
                     else {
@@ -370,8 +363,9 @@ int main() {
                     else {
                         double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
                         double newBet = currentBet * multiplier;
-                        if (newBet > 200.0) {
+                        if (newBet >= 200.0) {
                             newBet = 200.0;
+                            maxBetReachedCount++;
                         }
                         currentBet = newBet;
                     }
@@ -405,14 +399,12 @@ int main() {
                 stats.recordWin(currentBet);
                 consecutiveLosses = 0;
                 consecutiveWins++;
-                if (currentBet == 200.0) {
-                    if (!ui.askToContinue()) {
-                        break;
-                    }
-                }
                 if (useWinMultipliers) {
                     double newBet = currentBet * winStrategy.getMultiplier(consecutiveWins);
-                    if (newBet > 200.0) newBet = 200.0;
+                    if (newBet >= 200.0) {
+                        newBet = 200.0;
+                        maxBetReachedCount++;
+                    }
                     currentBet = newBet;
                 }
                 else {
@@ -437,8 +429,9 @@ int main() {
                 else {
                     double multiplier = lossStrategy.getMultiplier(consecutiveLosses);
                     double newBet = currentBet * multiplier;
-                    if (newBet > 200.0) {
+                    if (newBet >= 200.0) {
                         newBet = 200.0;
+                        maxBetReachedCount++;
                     }
                     currentBet = newBet;
                 }
@@ -465,6 +458,7 @@ int main() {
         std::cout << "Net Profit:        $" << net << "\n";
     else
         std::cout << "Net Loss:          $" << -net << "\n";
+    std::cout << "Max Bet Reached:   " << maxBetReachedCount << " times\n";
 
     std::cout << "Thank you for playing!\n";
     return 0;
