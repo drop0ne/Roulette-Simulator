@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <limits>
+#include <thread>
 
 // Enums for color and parity
 enum class Color { RED, BLACK, GREEN };
@@ -57,14 +58,10 @@ public:
             result.parity = Parity::NONE;
         }
         else {
-            // Set red numbers (typical American roulette red numbers)
+            // Typical American roulette red numbers.
             static const std::vector<int> redNumbers = { 1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36 };
-            if (std::find(redNumbers.begin(), redNumbers.end(), outcome) != redNumbers.end()) {
-                result.color = Color::RED;
-            }
-            else {
-                result.color = Color::BLACK;
-            }
+            result.color = (std::find(redNumbers.begin(), redNumbers.end(), outcome) != redNumbers.end())
+                ? Color::RED : Color::BLACK;
             result.parity = (outcome % 2 == 0) ? Parity::EVEN : Parity::ODD;
         }
         return result;
@@ -184,6 +181,34 @@ public:
     }
 };
 
+// New class to simulate the casino spin delay and track elapsed play time.
+class CasinoTimer {
+public:
+    CasinoTimer() : elapsedSeconds(0) {}
+
+    // This method simulates the delay between spins.
+    // We use a short actual sleep (100 ms) to simulate delay without waiting full real time.
+    void addSpin() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        elapsedSeconds += averageDelay;
+    }
+
+    // Returns true if the total simulated play time has reached 8 hours.
+    bool isTimeUp() const {
+        return elapsedSeconds >= maxTime;
+    }
+
+    // Optionally, report elapsed time (in seconds).
+    int getElapsedSeconds() const {
+        return elapsedSeconds;
+    }
+
+    static constexpr int averageDelay = 35;   // seconds per spin (average delay)
+    static constexpr int maxTime = 8 * 3600;      // 8 hours in seconds (28800 seconds)
+private:
+    int elapsedSeconds;
+};
+
 // Helper functions to convert enums to strings for printing.
 std::string colorToString(Color color) {
     switch (color) {
@@ -210,18 +235,19 @@ int main() {
 
     RouletteWheel wheel;
     StatsTracker stats;
+    CasinoTimer timer;
 
     // Betting settings
     double currentBet = 1.0;
     Color betColor = Color::BLACK; // start betting on black
     int consecutiveLosses = 0;
 
-    while (bankroll > 0) {
+    while (bankroll > 0 && !timer.isTimeUp()) {
         int autoSpinCount = ui.getAutoSpinCount();
 
         if (autoSpinCount > 0) {
             // Auto-play mode: perform autoSpinCount spins automatically.
-            for (int i = 0; i < autoSpinCount && bankroll > 0; ++i) {
+            for (int i = 0; i < autoSpinCount && bankroll > 0 && !timer.isTimeUp(); ++i) {
                 RouletteOutcome outcome = wheel.spin();
 
                 std::cout << "Roulette Outcome: " << numberToString(outcome.number)
@@ -234,13 +260,14 @@ int main() {
                     bankroll += currentBet;
                     std::cout << "You WIN! Gained $" << currentBet << "\n";
                     stats.recordWin(currentBet);
+                    // If the win followed a max bet ($200), ask to continue.
                     if (currentBet == 200.0) {
                         if (!ui.askToContinue()) {
-                            bankroll = 0; // exit outer loop
+                            bankroll = 0;
                             break;
                         }
                     }
-                    // Reset bet to $1 after a win.
+                    // Reset bet after a win.
                     currentBet = 1.0;
                     consecutiveLosses = 0;
                 }
@@ -274,9 +301,9 @@ int main() {
                 }
 
                 stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+                timer.addSpin(); // Simulate delay for this spin
 
-                if (bankroll <= 0) {
-                    std::cout << "Your bankroll is empty. Game over.\n";
+                if (bankroll <= 0 || timer.isTimeUp()) {
                     break;
                 }
             }
@@ -337,6 +364,7 @@ int main() {
             }
 
             stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+            timer.addSpin(); // Simulate delay for this spin
 
             if (bankroll <= 0) {
                 std::cout << "Your bankroll is empty. Game over.\n";
@@ -345,6 +373,10 @@ int main() {
         }
     }
 
+    std::cout << "\n=== Final Stats ===\n";
+    stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
+    std::cout << "Total simulated play time: " << timer.getElapsedSeconds() << " seconds ("
+        << timer.getElapsedSeconds() / 3600.0 << " hours)\n";
     std::cout << "Thank you for playing!\n";
     return 0;
 }
