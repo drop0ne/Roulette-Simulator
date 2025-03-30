@@ -273,6 +273,8 @@ std::string parityToString(Parity parity) {
 int main() {
     UserInterface ui;
     double bankroll = ui.getInitialBankroll();
+    // Store the initial bankroll to later compare gains/losses.
+    double startingBankroll = bankroll;
     int lossThreshold = ui.getLossThreshold();
 
     // New: Get betting strategy multipliers from the user.
@@ -306,14 +308,12 @@ int main() {
                     bankroll += currentBet;
                     std::cout << "You WIN! Gained $" << currentBet << "\n";
                     stats.recordWin(currentBet);
-                    // If the win followed a max bet ($200), ask to continue.
                     if (currentBet == 200.0) {
                         if (!ui.askToContinue()) {
                             bankroll = 0;
                             break;
                         }
                     }
-                    // Reset bet and consecutive losses after a win.
                     currentBet = 1.0;
                     consecutiveLosses = 0;
                 }
@@ -342,7 +342,7 @@ int main() {
                 }
 
                 stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-                timer.addSpin(); // Simulate delay for this spin.
+                timer.addSpin(); // Simulate delay for this spin
 
                 if (bankroll <= 0 || timer.isTimeUp()) {
                     break;
@@ -400,7 +400,7 @@ int main() {
             }
 
             stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
-            timer.addSpin(); // Simulate delay for this spin.
+            timer.addSpin(); // Simulate delay for this spin
 
             if (bankroll <= 0) {
                 std::cout << "Your bankroll is empty. Game over.\n";
@@ -413,6 +413,14 @@ int main() {
     stats.printStats(bankroll, currentBet, consecutiveLosses, betColor);
     std::cout << "Total simulated play time: " << timer.getElapsedSeconds() << " seconds ("
         << timer.getElapsedSeconds() / 3600.0 << " hours)\n";
+    std::cout << "Starting Bankroll: $" << startingBankroll << "\n";
+    std::cout << "Final Bankroll:    $" << bankroll << "\n";
+    double net = bankroll - startingBankroll;
+    if (net >= 0)
+        std::cout << "Net Profit:        $" << net << "\n";
+    else
+        std::cout << "Net Loss:          $" << -net << "\n";
+
     std::cout << "Thank you for playing!\n";
     return 0;
 }
