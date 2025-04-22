@@ -339,7 +339,7 @@ int main() {
 	double bankroll = ui.getInitialBankroll();
 	double startingBankroll = bankroll; // for profit calculations
 	int lossThreshold = ui.getLossThreshold();
-	double maxBet = 350.0; // max bet amount
+	double maxBet = 10000.0; // max bet amount
 
 	// Get loss multipliers.
 	std::vector<double> lossMultipliers = ui.getBettingStrategyMultipliers();
@@ -389,7 +389,6 @@ int main() {
 
 		double extraResult = extraBetMode.isEnabled() ? extraBetMode.processOutcome(outcome.number) : 0.0;
 		double totalWager = currentBet + (extraBetMode.isEnabled() ? extraBetMode.extraBetAmount() : 0.0);
-
 		if (outcome.color == betColor) { // Main bet wins.
 			// Even money win.
 			double netChange = currentBet + extraResult;
@@ -398,7 +397,7 @@ int main() {
 				std::cout << " (extra bets result in " << extraResult << ")";
 			std::cout << ".\n";
 			stats.recordWin(currentBet);
-			
+
 			if (consecutiveLosses > 0) { currentBet = 1.0; /* First Win after losing the bet is reset to the initial bet of $1. */ }
 
 			consecutiveWins++;
@@ -477,7 +476,7 @@ int main() {
 		};
 
 	// Main game loop.
-	while (bankroll > 0 && !timer.isTimeUp() && continuePlaying) {
+	while (bankroll > 0 && !timer.isTimeUp() && continuePlaying && currentBet <= bankroll) {
 		if (playMode == PlayMode::CONTINUOUS) {
 			// In continuous mode, process one spin per iteration.
 			if (!processSpin()) break;
