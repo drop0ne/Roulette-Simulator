@@ -336,7 +336,8 @@ int main() { // Main function
                 std::cout << "You lose. Net change: $" << net_loss << "\n";
                 ++consecutiveLosses; consecutiveWins = 0;
                 double newBet = currentBet * lossStrat.getMultiplier(consecutiveLosses);
-                if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; }
+				if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; } // Cap hit
+                /* TODO: Add a check if the max beat has repeated back to back consecutivly n times // force game stop and request instructions // stop, continue, manualy change bet */
                 currentBet = newBet;
             }
 			if (consecutiveLosses >= lossThreshold) { // Switch color
