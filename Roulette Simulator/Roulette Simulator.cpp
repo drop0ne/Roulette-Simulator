@@ -250,12 +250,14 @@ private:
 //  main()
 // ============================================================================
 int main() { // Main function
-	try { // Resize console window to 1920x1080
+	/*
+    try { // Resize console window to 1920x1080
         ConsoleControl::setWindowSize(1920, 1080);
     }
 	catch (const std::exception& ex) { // Handle console resize error
         std::cerr << "[Console resize failed] " << ex.what() << "\n";
     }
+    */
 
     UserInterface ui;
     bool playAgain = false;
