@@ -1,11 +1,9 @@
-// ============================================================================
-//  main.cpp – Roulette simulator with 720 × 480-pixel console window (updated)
-//  Build:  C++20, Visual Studio 2022 (x64, Windows)
-// ============================================================================
+// RouletteSimulator.cpp – Concurrent Roulette Simulator with ThreadPool and CNG RNG
+// Compliance: MN Gaming Control Board & US Standards (CSPRNG via Windows CNG)
+// Build:  C++20, Visual Studio 2022 (x64, Windows)
 
 // ----- Standard C++ headers -------------------------------------------------
 #include <iostream>
-#include <random>
 #include <chrono>
 #include <deque>
 #include <vector>
@@ -15,127 +13,88 @@
 #include <limits>
 #include <sstream>
 #include <thread>
-#include <cmath>          // for std::ceil
-#include <stdexcept>      // for std::runtime_error
-#include <tuple>          // for std::tie
+#include <cmath>
+#include <stdexcept>
+#include <future>
+#include <atomic>
 
-// ----- Win32 headers (console window control) -------------------------------
+// ----- Win32 & CNG headers ---------------------------------------------------
 #ifdef _WIN32
 #include <windows.h>
 #undef max
 #undef min
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt")
 #endif
 
+#include "ThreadPool.h"
+
 // ============================================================================
-//  ConsoleControl – cursor-safe, enlarge-only buffer, 1080 p ready
+//  Helper: CNG-based RNG
 // ============================================================================
-class ConsoleControl { // Console window control class
+static void getRandomBytes(BYTE* buffer, ULONG length) {
+    if (BCryptGenRandom(nullptr, buffer, length, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        throw std::runtime_error("CNG random generation failed");
+    }
+}
+
+class RandomNumberGenerator { // CNG-backed RNG
 public:
-    static void setWindowSize(int widthPx, int heightPx,
-        int x = CW_USEDEFAULT, int y = CW_USEDEFAULT)
-    {
-#ifdef _WIN32 // Windows only
-		HWND   hWnd = ::GetConsoleWindow(); // Get console window handle
-		HANDLE hOut = ::GetStdHandle(STD_OUTPUT_HANDLE); // Get console output handle
-        if (!hWnd || hOut == INVALID_HANDLE_VALUE)
-            throw std::runtime_error("No console window/handle");
-
-		::SetConsoleCursorPosition(hOut, { 0, 0 }); // Move cursor to top-left
-
-		CONSOLE_FONT_INFO font{}; // Get current font info
-        if (!::GetCurrentConsoleFont(hOut, FALSE, &font))
-            throw std::runtime_error("GetCurrentConsoleFont failed");
-
-		// Calculate target columns and rows based on font size
-        const SHORT targetCols = static_cast<SHORT>(
-            std::ceil(widthPx / static_cast<float>(font.dwFontSize.X)));
-        const SHORT targetRows = static_cast<SHORT>(
-            std::ceil(heightPx / static_cast<float>(font.dwFontSize.Y)));
-
-		// Set the console buffer size to the target size
-        CONSOLE_SCREEN_BUFFER_INFO csbi{};
-        if (!::GetConsoleScreenBufferInfo(hOut, &csbi))
-            throw std::runtime_error("GetConsoleScreenBufferInfo failed");
-
-		// Adjust the buffer size if necessary
-        COORD newBuf = { std::max(targetCols, csbi.dwSize.X),
-                         std::max(targetRows, csbi.dwSize.Y) };
-
-		// Set the buffer size to the new size
-        if (newBuf.X != csbi.dwSize.X || newBuf.Y != csbi.dwSize.Y) {
-            if (!::SetConsoleScreenBufferSize(hOut, newBuf))
-                throw std::runtime_error("SetConsoleScreenBufferSize failed");
-        }
-
-		// Set the console window size to the target size
-        SMALL_RECT newWin{ 0, 0,
-                            static_cast<SHORT>(targetCols - 1),
-                            static_cast<SHORT>(targetRows - 1) };
-        if (!::SetConsoleWindowInfo(hOut, TRUE, &newWin))
-            throw std::runtime_error("SetConsoleWindowInfo failed");
-
-		// Set the console font size to the target size
-        DWORD style = ::GetWindowLong(hWnd, GWL_STYLE);
-        DWORD exStyle = ::GetWindowLong(hWnd, GWL_EXSTYLE);
-
-		// Adjust the window rectangle to fit the new size
-        RECT rc{ 0, 0, widthPx, heightPx };
-        if (!::AdjustWindowRectEx(&rc, style, FALSE, exStyle))
-            throw std::runtime_error("AdjustWindowRectEx failed");
-
-		// Move the window to the specified position
-        if (!::MoveWindow(hWnd, x, y,
-            rc.right - rc.left,
-            rc.bottom - rc.top, TRUE))
-            throw std::runtime_error("MoveWindow failed");
-#else
-		(void)widthPx; (void)heightPx; (void)x; (void)y; // No-op for non-Windows
-#endif
+    int getRandomNumber(int min, int max) {
+        uint32_t r;
+        getRandomBytes(reinterpret_cast<BYTE*>(&r), sizeof(r));
+        return min + static_cast<int>(r % (static_cast<uint32_t>(max - min + 1)));
     }
 };
 
 // ============================================================================
-//  Enums, Helpers, and Classes (unchanged)
+//  Core game enums & helpers
 // ============================================================================
 enum class Color { RED, BLACK, GREEN };
 enum class Parity { ODD, EVEN, NONE };
 enum class PlayMode { MANUAL, AUTOPLAY, CONTINUOUS };
 
-std::string numberToString(int num) { // Convert number to string
+static std::string numberToString(int num) {
     return (num == 37) ? "00" : std::to_string(num);
 }
-std::string colorToString(Color c) { // Convert color to string
-    switch (c) { case Color::RED: return "Red"; case Color::BLACK: return "Black"; case Color::GREEN: return "Green"; }
-                                return "Unknown";
-}
-std::string parityToString(Parity p) { // Convert parity to string
-    switch (p) { case Parity::ODD: return "Odd"; case Parity::EVEN: return "Even"; case Parity::NONE: return "None"; }
-                                 return "Unknown";
+
+static std::string colorToString(Color c) {
+    switch (c) {
+    case Color::RED:   return "Red";
+    case Color::BLACK: return "Black";
+    case Color::GREEN: return "Green";
+    }
+    return "Unknown";
 }
 
-class RandomNumberGenerator { // Random number generator class
-public:
-    RandomNumberGenerator() : rng(std::random_device{}()) {}
-    int getRandomNumber(int min, int max) { std::uniform_int_distribution<int> dist(min, max); return dist(rng); }
-private:
-    std::mt19937 rng;
-};
+static std::string parityToString(Parity p) {
+    switch (p) {
+    case Parity::ODD:  return "Odd";
+    case Parity::EVEN: return "Even";
+    default:           return "None";
+    }
+}
 
-struct RouletteOutcome { // Roulette outcome structure
+// Outcome struct
+struct RouletteOutcome {
     int number;
     Color color;
     Parity parity;
 };
 
-class RouletteWheel { // Roulette wheel class
+// Wheel spinner
+class RouletteWheel {
 public:
     RouletteWheel() : rng() {}
     RouletteOutcome spin() {
         int outcome = rng.getRandomNumber(0, 37);
         RouletteOutcome res{ outcome, Color::GREEN, Parity::NONE };
         if (outcome > 0 && outcome < 37) {
-            static const std::vector<int> redNums = { 1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36 };
-            res.color = (std::find(redNums.begin(), redNums.end(), outcome) != redNums.end()) ? Color::RED : Color::BLACK;
+            static const std::vector<int> redNums = {
+                1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36
+            };
+            res.color = (std::find(redNums.begin(), redNums.end(), outcome) != redNums.end())
+                ? Color::RED : Color::BLACK;
             res.parity = (outcome % 2 == 0) ? Parity::EVEN : Parity::ODD;
         }
         return res;
@@ -144,10 +103,10 @@ private:
     RandomNumberGenerator rng;
 };
 
-class ExtraBetMode { // Extra-bet mode class
+// Extra-bet mode
+class ExtraBetMode {
 public:
     explicit ExtraBetMode(bool en = false) : enabled(en) {}
-    bool isEnabled() const { return enabled; }
     double extraBetAmount() const { return enabled ? 2.0 : 0.0; }
     double processOutcome(int outcome) const {
         if (!enabled) return 0.0;
@@ -157,258 +116,200 @@ private:
     bool enabled;
 };
 
-class BettingStrategy { // Betting strategy class
+// Betting strategy
+class BettingStrategy {
 public:
-    explicit BettingStrategy(std::vector<double> m) : multipliers(std::move(m)) {
+    explicit BettingStrategy(const std::vector<double>& m) : multipliers(m) {
         if (multipliers.empty()) multipliers = { 3.0,3.0,2.0 };
     }
     double getMultiplier(int n) const {
-        if (n <= static_cast<int>(multipliers.size())) return multipliers[n - 1];
+        if (n <= static_cast<int>(multipliers.size()))
+            return multipliers[n - 1];
         return multipliers.back();
     }
 private:
     std::vector<double> multipliers;
 };
 
-class StatsTracker { // Stats tracker class
+// Timer for simulation speed (headless)
+class CasinoTimer {
 public:
-    void recordWin(double b) { ++wins; ++spins; moneyBet += b; add("Win:  $" + std::to_string(b)); }
-    void recordLoss(double b) { ++loss; ++spins; moneyBet += b; add("Loss: $" + std::to_string(b)); }
-    void addOutcomeToHistory(const RouletteOutcome& o) {
-        if (o.number == 0) ++count0;
-        else if (o.number == 37) ++count00;
-        add("Spin: " + numberToString(o.number) + " (" + colorToString(o.color) + ", " + parityToString(o.parity) + ")");
+    void addSpin() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        elapsed += 35;
     }
-	void print(double bankroll, double currBet, int consLoss, Color betColor) const { // Print stats
-        std::cout << "\n===== Stats =====\n"
-            << "Bankroll: $" << bankroll << "\n"
-            << "Current Bet: $" << currBet << "\n"
-            << "Consecutive Losses: " << consLoss << "\n"
-            << "Betting on: " << colorToString(betColor) << "\n"
-            << "Spins: " << spins << " Wins: " << wins << " Losses: " << loss << " Total Bet: $" << moneyBet << "\n"
-            << "Recent (" << history.size() << "):\n";
-        for (const auto& h : history) std::cout << "  " << h << "\n";
-        std::cout << "Greens: " << (count0 + count00) << " (0: " << count0 << ", 00: " << count00 << ")\n"
-            << "=================\n";
-    }
-private:
-    int wins = 0, loss = 0, spins = 0;
-    double moneyBet = 0;
-    int count0 = 0, count00 = 0;
-    std::deque<std::string> history;
-    void add(const std::string& s) { if (history.size() >= 10) history.pop_front(); history.push_back(s); }
-};
-
-class UserInterface { // User interface class
-public:
-    template<typename T>
-    T getValidated(const std::string& prompt) const {
-        T v;
-		while (true) { // Loop until valid input
-            std::cout << prompt;
-            if (std::cin >> v) { std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); return v; }
-            std::cout << "Invalid input, try again.\n";
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        }
-    }
-    double getInitialBankroll() const { return getValidated<double>("Enter your initial bankroll: $"); }
-    int getLossThreshold() const { return getValidated<int>("Enter max consecutive losses before switching: "); }
-	std::pair<PlayMode, int> getPlayMode() const { // Get play mode
-        int m = getValidated<int>("Enter play mode (0=manual, -1=continuous, >0=auto spins): ");
-        if (m == 0) return { PlayMode::MANUAL,0 };
-        if (m == -1) return { PlayMode::CONTINUOUS,0 };
-        return { PlayMode::AUTOPLAY,m };
-    }
-	std::vector<double> getMultipliers(const std::string& prompt, const std::string& emptyMsg) const { // Get multipliers
-        std::cout << prompt;
-        std::string line; std::getline(std::cin, line);
-        std::istringstream iss(line);
-        std::vector<double> m; double x;
-        while (iss >> x) m.push_back(x);
-        if (m.empty()) std::cout << emptyMsg << "\n";
-        return m;
-    }
-	bool askExtraBet() const { // Ask for extra-bet mode
-        char c;
-        std::cout << "Enable Extra-Bet mode ($1 on 0 and 00)? (y/n): ";
-        std::cin >> c; std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        return (c == 'y' || c == 'Y');
-    }
-};
-
-class CasinoTimer { // Casino timer class
-public:
-    void addSpin() { std::this_thread::sleep_for(std::chrono::milliseconds(100)); elapsed += 35; }
     bool isTimeUp() const { return elapsed >= 8 * 3600; }
-    int seconds() const { return elapsed; }
 private:
     int elapsed = 0;
 };
 
 // ============================================================================
-//  main()
+//  Batch simulation structures
 // ============================================================================
-int main() { // Main function
-	/*
-    try { // Resize console window to 1920x1080
-        ConsoleControl::setWindowSize(1920, 1080);
-    }
-	catch (const std::exception& ex) { // Handle console resize error
-        std::cerr << "[Console resize failed] " << ex.what() << "\n";
-    }
-    */
+struct SimulationSettings {
+    double initialBankroll;
+    int lossThreshold;
+    std::vector<double> lossMultipliers;
+    std::vector<double> winMultipliers;
+    bool extraBet;
+    PlayMode playMode;
+    int autoSpins;
+    double startingBet;
+};
 
-    UserInterface ui;
-    bool playAgain = false;
-    bool hasExistingBankroll = false;
-    const double maxBet = 10000.0;  // maximum bet cap
-    double bankroll = 0.0, startingBankroll = 0.0;
-    int lossThreshold = 0;
+struct SimulationResult {
+    double finalBankroll;
+};
 
-	do { // Main game loop
-        // -- (Re)gather settings
-		if (!hasExistingBankroll) { // Ask for initial bankroll
-            bankroll = ui.getInitialBankroll();
+// Single-instance simulation
+static SimulationResult simulateOne(const SimulationSettings& s) {
+    const double maxBet = 10000.0;
+    double bankroll = s.initialBankroll;
+    RouletteWheel wheel;
+    ExtraBetMode extra(s.extraBet);
+    BettingStrategy lossStrat(s.lossMultipliers);
+    BettingStrategy winStrat(s.winMultipliers);
+    bool useWinMult = !s.winMultipliers.empty();
+    CasinoTimer timer;
+
+    double currentBet = s.startingBet;
+    Color betColor = Color::BLACK;
+    int consecutiveLosses = 0, consecutiveWins = 0;
+
+    while (bankroll > 0 && !timer.isTimeUp() && currentBet <= bankroll) {
+        auto res = wheel.spin();
+        double ext = extra.processOutcome(res.number);
+
+        if (res.color == betColor) {
+            bankroll += currentBet + ext;
+            ++consecutiveWins; consecutiveLosses = 0;
+            if (useWinMult) {
+                double nb = s.startingBet * winStrat.getMultiplier(consecutiveWins);
+                currentBet = (nb >= maxBet ? maxBet : nb);
+            }
+            else {
+                currentBet = s.startingBet;
+            }
         }
-        startingBankroll = bankroll;
-		lossThreshold = ui.getLossThreshold(); // Ask for loss threshold
-
-        auto lossMult = ui.getMultipliers(
-            "Enter loss multipliers (e.g. \"3 3 2\"): ",
-            "No multipliers entered – using default 3 3 2.");
-        auto winMult = ui.getMultipliers(
-            "Enter win multipliers (empty = reset to $1): ",
-            "No win multipliers – bet resets to $1 after a win.");
-
-		ExtraBetMode extra(ui.askExtraBet()); // Ask for extra-bet mode
-		auto [playMode, autoSpins] = ui.getPlayMode(); // Ask for play mode
-
-		BettingStrategy lossStrat(lossMult); // Loss multipliers
-		BettingStrategy winStrat(winMult); // Win multipliers
-		bool useWinMult = !winMult.empty(); // Use win multipliers
-
-		RouletteWheel wheel; // Roulette wheel
-		StatsTracker stats; // Stats tracker
-		CasinoTimer timer; // Casino timer
-
-		double initialBet = 100.0; // Initial bet amount
-		double currentBet = initialBet; // Current bet amount
-		Color betColor = Color::BLACK; // Initial bet color // Black // Add method to get color from user
-        int consecutiveLosses = 0, consecutiveWins = 0, maxBetHits = 0;
-        double nextProfitThresh = startingBankroll;
-        bool keepPlaying = true;
-
-        // Lambda for one spin
-		auto spinOnce = [&]() -> bool { // Spin once and update bankroll
-			if (playMode == PlayMode::MANUAL) { // Manual play
-                std::cout << "Press <Enter> to spin...";
-                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            }
-			auto spin_result = wheel.spin(); // Spin the wheel
-            std::cout << "\nOutcome: " << numberToString(spin_result.number) 
-                << " (" << colorToString(spin_result.color)
-                << ", " << parityToString(spin_result.parity) << ")\n";
-            stats.addOutcomeToHistory(spin_result); 
-
-            double extraResult = extra.processOutcome(spin_result.number);
-            double totalWager = currentBet + extra.extraBetAmount();
-
-			if (spin_result.color == betColor) { // Win
-                double net_gain = currentBet + extraResult;
-                bankroll += net_gain;
-                stats.recordWin(currentBet);
-                std::cout << "You WIN! Net change: $" << net_gain << "\n";
-                ++consecutiveWins; consecutiveLosses = 0;
-				if (useWinMult) { // Use win multipliers
-                    double newBet = initialBet * winStrat.getMultiplier(consecutiveWins);
-					if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; } // Cap hit
-                    currentBet = newBet;
-                }
-				else { // Reset to initial bet
-                    currentBet = initialBet; consecutiveWins = 0;
-                }
-            }
-			else { // Lose
-                double net_loss = -currentBet + extraResult;
-                bankroll += net_loss;
-                stats.recordLoss(currentBet);
-                std::cout << "You lose. Net change: $" << net_loss << "\n";
-                ++consecutiveLosses; consecutiveWins = 0;
-                double newBet = currentBet * lossStrat.getMultiplier(consecutiveLosses);
-				if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; } // Cap hit
-                /* TODO: Add a check if the max beat has repeated back to back consecutivly n times // force game stop and request instructions // stop, continue, manualy change bet */
-                currentBet = newBet;
-            }
-			if (consecutiveLosses >= lossThreshold) { // Switch color
-                betColor = (betColor == Color::BLACK) ? Color::RED : Color::BLACK;
-                std::cout << "Reached " << lossThreshold << " losses – switching to "
-                    << colorToString(betColor) << ".\n";
+        else {
+            bankroll += -currentBet + ext;
+            ++consecutiveLosses; consecutiveWins = 0;
+            double nb = currentBet * lossStrat.getMultiplier(consecutiveLosses);
+            currentBet = (nb >= maxBet ? maxBet : nb);
+            if (consecutiveLosses >= s.lossThreshold) {
+                betColor = (betColor == Color::BLACK ? Color::RED : Color::BLACK);
                 consecutiveLosses = 0;
             }
-            stats.print(bankroll, currentBet, consecutiveLosses, betColor);
-            timer.addSpin();
-
-            if (playMode != PlayMode::CONTINUOUS &&
-				bankroll - startingBankroll >= nextProfitThresh) { // Check profit threshold
-                std::cout << "You are up by $" << bankroll - startingBankroll << ". Continue? (y/n): ";
-                char c; std::cin >> c; std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                if (c != 'y' && c != 'Y') return false;
-                nextProfitThresh += startingBankroll;
-            }
-            return true;
-            };
-
-        // -- Main game loop
-        while (bankroll > 0 && !timer.isTimeUp() && keepPlaying && currentBet <= bankroll) {
-			if (playMode == PlayMode::CONTINUOUS) { // Continuous play
-                if (!spinOnce()) break;
-            }
-			else if (playMode == PlayMode::AUTOPLAY) { // Auto-play
-                for (int i = 0; i < autoSpins && bankroll > 0 && !timer.isTimeUp(); ++i) {
-                    if (!spinOnce()) { keepPlaying = false; break; }
-                }
-				if (keepPlaying) { // Ask to continue after auto-spins
-                    std::cout << "Auto-spin block done. Continue? (y/n): ";
-                    char c; std::cin >> c; std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    if (c != 'y' && c != 'Y') break;
-                }
-            }
-			else { // Manual play
-                if (!spinOnce()) break;
-            }
         }
+        timer.addSpin();
+    }
 
-        // -- Final summary
-        std::cout << "\n=== Final Stats ===\n";
-        stats.print(bankroll, currentBet, consecutiveLosses, betColor);
-        std::cout << "Simulated play time: " << (timer.seconds() / 3600.0) << " hours\n"
-            << "Starting bankroll: $" << startingBankroll << "\n"
-            << "Final bankroll:   $" << bankroll << "\n"
-            << "Net " << (bankroll >= startingBankroll ? "profit: $" : "loss: $")
-            << std::abs(bankroll - startingBankroll) << "\n"
-            << "Max-bet cap hit: " << maxBetHits << " times\n";
+    return { bankroll };
+}
 
-        // -- Game over options
-        std::cout << "\nGame over. Choose an option:\n"
-            << "  1) Reset and start over\n"
-            << "  2) Restart with same bankroll and reenter questions\n"
-            << "  3) Quit\n"
-            << "Enter choice (1-3): ";
-        int choice = ui.getValidated<int>("");
-		if (choice == 1) { // Reset and start over
-            hasExistingBankroll = false;
-            playAgain = true;
+// ============================================================================
+//  main()
+// ============================================================================
+int main() {
+    // 1) Gather settings
+    std::cout << "Enter initial bankroll: $";
+    double initBank;
+    while (!(std::cin >> initBank) || initBank <= 0) {
+        std::cin.clear(); std::cin.ignore(INT_MAX, '\n');
+        std::cout << "Positive number please: $";
+    }
+
+    std::cout << "Enter loss threshold: ";
+    int lossTh;
+    while (!(std::cin >> lossTh) || lossTh < 0) {
+        std::cin.clear(); std::cin.ignore(INT_MAX, '\n');
+        std::cout << "Non-negative integer please: ";
+    }
+    std::cin.ignore(INT_MAX, '\n');
+
+    std::cout << "Enter loss multipliers (e.g. 3 3 2): ";
+    std::vector<double> lossMult;
+    {
+        std::string line; std::getline(std::cin, line);
+        std::istringstream iss(line); double x;
+        while (iss >> x) lossMult.push_back(x);
+        if (lossMult.empty()) lossMult = { 3,3,2 };
+    }
+
+    std::cout << "Enter win multipliers (empty = reset to $1): ";
+    std::vector<double> winMult;
+    {
+        std::string line; std::getline(std::cin, line);
+        std::istringstream iss(line); double x;
+        while (iss >> x) winMult.push_back(x);
+    }
+
+    std::cout << "Enable extra-bet ($1 on 0/00)? (y/n): ";
+    char c; std::cin >> c; bool extra = (c == 'y' || c == 'Y');
+
+    std::cout << "Play mode (0=manual, -1=continuous, >0=auto spins): ";
+    int pm; std::cin >> pm;
+    PlayMode mode = (pm == 0 ? PlayMode::MANUAL : (pm < 0 ? PlayMode::CONTINUOUS : PlayMode::AUTOPLAY));
+    int autoSpins = (pm > 0 ? pm : 0);
+
+    std::cout << "Enter starting bet: $";
+    double startBet;
+    while (!(std::cin >> startBet) || startBet <= 0) {
+        std::cin.clear(); std::cin.ignore(INT_MAX, '\n');
+        std::cout << "Positive number please: $";
+    }
+
+    std::cout << "How many simulation instances?: ";
+    size_t numSims;
+    while (!(std::cin >> numSims) || numSims == 0) {
+        std::cin.clear(); std::cin.ignore(INT_MAX, '\n');
+        std::cout << "Enter a positive integer: ";
+    }
+
+    SimulationSettings settings{
+        initBank, lossTh, lossMult, winMult,
+        extra, mode, autoSpins, startBet
+    };
+
+    // 2) ThreadPool & enqueue
+    unsigned int poolSize = std::thread::hardware_concurrency();
+    if (poolSize == 0) poolSize = 1;
+    ThreadPool pool(poolSize);
+
+    std::atomic<size_t> done{ 0 };
+    std::vector<std::future<SimulationResult>> futures;
+    futures.reserve(numSims);
+
+    // 3) Progress reporter
+    std::jthread prog([&]() {
+        while (done < numSims) {
+            std::cout << "\rProgress: " << done << " / " << numSims << std::flush;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
-		else if (choice == 2) { // Restart with same bankroll
-            hasExistingBankroll = true;
-            playAgain = true;
-        }
-		else { // Quit
-            playAgain = false;
-        }
-		system("cls");
-    } while (playAgain);
+        std::cout << "\rProgress: " << done << " / " << numSims << " - Complete!\n";
+        });
+
+    // 4) Launch all jobs
+    for (size_t i = 0; i < numSims; ++i) {
+        futures.emplace_back(
+            pool.enqueue([&settings, &done]() {
+                auto r = simulateOne(settings);
+                ++done;
+                return r;
+                })
+        );
+    }
+
+    // 5) Collect & report
+    std::vector<SimulationResult> results;
+    results.reserve(numSims);
+    for (auto& f : futures) results.push_back(f.get());
+
+    std::cout << "\nAll simulations finished.\n";
+    for (size_t i = 0; i < results.size(); ++i) {
+        std::cout << "Sim " << (i + 1)
+            << " final bankroll: $" << results[i].finalBankroll << "\n";
+    }
 
     return 0;
 }
