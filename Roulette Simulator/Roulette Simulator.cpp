@@ -292,7 +292,8 @@ int main() { // Main function
 		StatsTracker stats; // Stats tracker
 		CasinoTimer timer; // Casino timer
 
-		double currentBet = 1.0; // Current bet amount
+		double initialBet = 100.0; // Initial bet amount
+		double currentBet = initialBet; // Current bet amount
 		Color betColor = Color::BLACK; // Initial bet color // Black // Add method to get color from user
         int consecutiveLosses = 0, consecutiveWins = 0, maxBetHits = 0;
         double nextProfitThresh = startingBankroll;
@@ -314,25 +315,25 @@ int main() { // Main function
             double totalWager = currentBet + extra.extraBetAmount();
 
 			if (spin_result.color == betColor) { // Win
-                double net = currentBet + extraResult;
-                bankroll += net;
+                double net_gain = currentBet + extraResult;
+                bankroll += net_gain;
                 stats.recordWin(currentBet);
-                std::cout << "You WIN! Net change: $" << net << "\n";
+                std::cout << "You WIN! Net change: $" << net_gain << "\n";
                 ++consecutiveWins; consecutiveLosses = 0;
 				if (useWinMult) { // Use win multipliers
-                    double newBet = currentBet * winStrat.getMultiplier(consecutiveWins);
-                    if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; }
+                    double newBet = initialBet * winStrat.getMultiplier(consecutiveWins);
+					if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; } // Cap hit
                     currentBet = newBet;
                 }
-				else { // Reset to $1
-                    currentBet = 1.0; consecutiveWins = 0;
+				else { // Reset to initial bet
+                    currentBet = initialBet; consecutiveWins = 0;
                 }
             }
 			else { // Lose
-                double net = -currentBet + extraResult;
-                bankroll += net;
+                double net_loss = -currentBet + extraResult;
+                bankroll += net_loss;
                 stats.recordLoss(currentBet);
-                std::cout << "You lose. Net change: $" << net << "\n";
+                std::cout << "You lose. Net change: $" << net_loss << "\n";
                 ++consecutiveLosses; consecutiveWins = 0;
                 double newBet = currentBet * lossStrat.getMultiplier(consecutiveLosses);
                 if (newBet >= maxBet) { newBet = maxBet; ++maxBetHits; }
